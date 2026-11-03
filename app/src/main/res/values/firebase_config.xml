@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Same project in both apps. This API key identifies the project; it is not a controller password. -->
+    <string name="firebase_web_api_key" translatable="false"></string>
+    <string name="firebase_database_url" translatable="false">https://appafora-8d62f-default-rtdb.firebaseio.com</string>
+</resources>

@@ -1,0 +1,30 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "controllers": { ".read": false, ".write": false },
+    "aforo": {
+      ".read": true,
+      ".write": "auth != null && root.child('controllers').child(auth.uid).val() === true && newData.exists()",
+      ".validate": "newData.hasChildren(['currentPeople', 'maxCapacity', 'lastUpdated']) && newData.child('currentPeople').val() <= newData.child('maxCapacity').val()",
+      "currentPeople": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0" },
+      "maxCapacity": { ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() % 1 === 0" },
+      "lastUpdated": { ".validate": "newData.isNumber() && newData.val() > 0" },
+      "$other": { ".validate": false }
+    },
+    "history": {
+      ".read": "auth != null && root.child('controllers').child(auth.uid).val() === true",
+      "$event": {
+        ".write": "auth != null && root.child('controllers').child(auth.uid).val() === true && !data.exists() && newData.exists()",
+        ".validate": "newData.hasChildren(['id','type','timestamp','previousCount','newCount','adminUser'])",
+        "id": { ".validate": "newData.isString() && newData.val() === $event" },
+        "type": { ".validate": "newData.val() === 'ENTRY' || newData.val() === 'EXIT' || newData.val() === 'RESET' || newData.val() === 'CAPACITY_CHANGE'" },
+        "timestamp": { ".validate": "newData.isNumber() && newData.val() > 0" },
+        "previousCount": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0" },
+        "newCount": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0" },
+        "adminUser": { ".validate": "newData.isString()" },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}

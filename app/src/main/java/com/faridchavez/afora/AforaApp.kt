@@ -60,6 +60,16 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 // ---------- COLORES EXTRA ----------
 val VerdeOscuro = Color(0xFF064E3B)
@@ -85,24 +95,44 @@ enum class Pantalla(val titulo: String) {
 // =====================================================
 @Composable
 fun AforaApp() {
-    var usuario by rememberSaveable { mutableStateOf<String?>(null) }
-    val u = usuario
-    if (u == null) {
-        PantallaLogin(onIngresar = { usuario = it })
+    val context = LocalContext.current.applicationContext
+    val session = remember { FirebaseSession(context) }
+    val store = remember { SessionStore(context) }
+    var usuario by remember { mutableStateOf<String?>(null) }
+    var restoring by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        session.onRefresh = { store.save(it) }
+        val saved = withContext(Dispatchers.IO) { store.read() }
+        if (saved != null) {
+            try { usuario = withContext(Dispatchers.IO) { session.restore(saved) } }
+            catch (e: Exception) { if (e is CancellationException) throw e; session.logout() }
+        }
+        restoring = false
+    }
+    if (restoring) {
+        Box(Modifier.fillMaxSize().background(Fondo), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    } else if (usuario == null) {
+        PantallaLogin(session = session, onIngresar = { usuario = it })
     } else {
-        AppPrincipal(usuario = u, onCerrarSesion = { usuario = null })
+        AppPrincipal(usuario = usuario!!, session = session, onCerrarSesion = {
+            session.logout(); store.clear(); usuario = null
+        })
     }
 }
-
 // =====================================================
 // INICIO DE SESIÓN
 // =====================================================
 @Composable
-fun PantallaLogin(onIngresar: (String) -> Unit) {
+fun PantallaLogin(session: FirebaseSession, onIngresar: (String) -> Unit) {
     var correo by rememberSaveable { mutableStateOf("") }
-    var clave by rememberSaveable { mutableStateOf("") }
+    var clave by remember { mutableStateOf("") }
     var verClave by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var registro by rememberSaveable { mutableStateOf(false) }
+    var nombre by rememberSaveable { mutableStateOf("") }
+    var confirmacion by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val authScope = rememberCoroutineScope()
 
     Column(
         Modifier
@@ -145,10 +175,15 @@ fun PantallaLogin(onIngresar: (String) -> Unit) {
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Column(Modifier.padding(24.dp)) {
-                Text("Iniciar sesión", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                Text(if (registro) "Crear cuenta" else "Iniciar sesión", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
                 Text("Ingresa con tu correo institucional", fontSize = 18.sp, color = GrisTexto)
                 Spacer(Modifier.height(24.dp))
 
+                if (registro) {
+                    OutlinedTextField(value = nombre, onValueChange = { nombre = it }, label = { Text("Nombre") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
+                    Spacer(Modifier.height(16.dp))
+                }
                 OutlinedTextField(
                     value = correo,
                     onValueChange = { correo = it; error = null },
@@ -184,6 +219,17 @@ fun PantallaLogin(onIngresar: (String) -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                if (registro) {
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(value = confirmacion, onValueChange = { confirmacion = it },
+                        label = { Text("Confirmar contraseña") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
+                }
+                TextButton(enabled = !busy, onClick = { registro = !registro; clave = ""; confirmacion = ""; error = null }) {
+                    Text(if (registro) "Ya tengo cuenta. Iniciar sesión" else "Crear una cuenta", color = VerdeFuerte)
+                }
                 error?.let {
                     Spacer(Modifier.height(8.dp))
                     Text(it, color = RojoFuerte, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
@@ -194,12 +240,27 @@ fun PantallaLogin(onIngresar: (String) -> Unit) {
                 Button(
                     onClick = {
                         when {
-                            correo.isBlank() || clave.isBlank() -> error = "Completa tu correo y contraseña"
-                            !correo.contains("@") -> error = "Ingresa un correo válido"
-                            clave.length < 4 -> error = "La contraseña debe tener al menos 4 caracteres"
-                            else -> onIngresar(correo)
+                            correo.isBlank() || clave.isBlank() || (registro && (nombre.isBlank() || confirmacion.isBlank())) -> error = "Completa todos los campos"
+                            !android.util.Patterns.EMAIL_ADDRESS.matcher(correo.trim()).matches() -> error = "Ingresa un correo válido"
+                            registro && clave.length < 6 -> error = "La contraseña debe tener al menos 6 caracteres"
+                            registro && clave != confirmacion -> error = "Las contraseñas no coinciden"
+                            else -> {
+                                busy = true; error = null
+                                authScope.launch {
+                                    try {
+                                        val name = withContext(Dispatchers.IO) {
+                                            if (registro) session.register(nombre, correo, clave) else session.login(correo, clave)
+                                        }
+                                        clave = ""; confirmacion = ""; onIngresar(name)
+                                    } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
+                                        error = e.message ?: "No se pudo conectar"
+                                    } finally { busy = false }
+                                }
+                            }
                         }
                     },
+                    enabled = !busy,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp),
@@ -208,7 +269,7 @@ fun PantallaLogin(onIngresar: (String) -> Unit) {
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(28.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Ingresar", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text(if (busy) "Conectando…" else if (registro) "Registrarme" else "Ingresar", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -219,7 +280,28 @@ fun PantallaLogin(onIngresar: (String) -> Unit) {
 // APP PRINCIPAL: menú lateral + barra superior + barra inferior
 // =====================================================
 @Composable
-fun AppPrincipal(usuario: String, onCerrarSesion: () -> Unit) {
+fun AppPrincipal(usuario: String, session: FirebaseSession, onCerrarSesion: () -> Unit) {
+    var aforo by remember { mutableStateOf<SharedAforo?>(null) }
+    var estado by remember { mutableStateOf("Conectando con el comedor…") }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var active by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, _ -> active = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(active, session) {
+        if (active) while (true) {
+            try {
+                aforo = withContext(Dispatchers.IO) { SharedAforoRepository(session).fetch() }
+                estado = "Actualizado · " + java.text.DateFormat.getTimeInstance().format(java.util.Date(aforo!!.updatedAt))
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                estado = if (aforo == null) (e.message ?: "Sin conexión") else "Sin conexión · mostrando el último aforo recibido"
+            }
+            delay(2000)
+        }
+    }
     var pantalla by rememberSaveable { mutableStateOf(Pantalla.INICIO) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -260,8 +342,8 @@ fun AppPrincipal(usuario: String, onCerrarSesion: () -> Unit) {
         ) { padding ->
             Box(Modifier.padding(padding)) {
                 when (pantalla) {
-                    Pantalla.INICIO -> PantallaInicio()
-                    Pantalla.AFORO -> PantallaAforo()
+                    Pantalla.INICIO -> Column { Text("Hola, $usuario", Modifier.padding(16.dp), color = VerdeOscuro); Text(estado, Modifier.padding(horizontal = 16.dp)); aforo?.let { PantallaInicio(it.people, it.capacity) } }
+                    Pantalla.AFORO -> Column { Text(estado, Modifier.padding(16.dp)); aforo?.let { PantallaAforo(it.people, it.capacity) } }
                     Pantalla.AMBIENTE -> PantallaAmbiente()
                     Pantalla.HISTORIAL -> PantallaHistorial()
                     Pantalla.NOTIFICACIONES -> PantallaNotificaciones()
@@ -401,14 +483,14 @@ fun MenuLateral(
 // PANTALLAS
 // =====================================================
 @Composable
-fun PantallaInicio() {
+fun PantallaInicio(actual: Int, capacidad: Int) {
     ContenidoPantalla {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.LocationOn, null, tint = VerdeFuerte, modifier = Modifier.size(30.dp))
             Spacer(Modifier.width(6.dp))
             Text("Campus Lima", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
         }
-        TarjetaAforo(actual = 78, capacidad = 100)
+        TarjetaAforo(actual = actual, capacidad = capacidad)
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             TarjetaSensor(
                 modifier = Modifier.weight(1f),
@@ -435,7 +517,7 @@ fun PantallaInicio() {
 }
 
 @Composable
-fun PantallaAforo(actual: Int = 78, capacidad: Int = 100) {
+fun PantallaAforo(actual: Int, capacidad: Int) {
     val progreso = actual.toFloat() / capacidad
     val porcentaje = (progreso * 100).toInt()
     val (nivel, fondoChip, textoChip) = nivelAforo(porcentaje)
@@ -446,7 +528,7 @@ fun PantallaAforo(actual: Int = 78, capacidad: Int = 100) {
     }
 
     ContenidoPantalla {
-        LineaEstado("Actualización en vivo", "Hoy")
+        LineaEstado("Aforo compartido", "Comedor")
 
         TarjetaBlanca(Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1008,11 +1090,11 @@ fun GraficoLinea(
 @Preview(showBackground = true, widthDp = 360, heightDp = 800)
 @Composable
 fun LoginPreview() {
-    PantallaLogin(onIngresar = {})
+    PantallaLogin(session = FirebaseSession(LocalContext.current), onIngresar = {})
 }
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 800)
 @Composable
 fun AppPreview() {
-    AppPrincipal(usuario = "farid@tecsup.edu.pe", onCerrarSesion = {})
+    AppPrincipal(usuario = "Farid", session = FirebaseSession(LocalContext.current), onCerrarSesion = {})
 }
