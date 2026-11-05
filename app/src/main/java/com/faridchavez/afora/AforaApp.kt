@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -735,6 +736,9 @@ fun PantallaHistorial() {
     }
 }
 
+// =====================================================
+// NOTIFICACIONES (con colores según el nivel de aforo)
+// =====================================================
 data class Notificacion(
     val titulo: String,
     val hora: String,
@@ -742,18 +746,54 @@ data class Notificacion(
     val icono: ImageVector,
     val color: Color,
     val fondo: Color,
-    val nueva: Boolean
+    val nueva: Boolean,
+    val etiqueta: String? = null
 )
+
+// Crea la notificación de aforo con el color según qué tan lleno está
+fun notificacionAforo(porcentaje: Int, hora: String, nueva: Boolean): Notificacion = when {
+    porcentaje < 50 -> Notificacion(
+        titulo = "Aforo bajo",
+        hora = hora,
+        detalle = "$porcentaje% de capacidad. Hay pocas personas, puedes ingresar tranquilo.",
+        icono = Icons.Filled.Groups,
+        color = VerdeFuerte,
+        fondo = VerdeClaro,
+        nueva = nueva,
+        etiqueta = "POCAS PERSONAS"
+    )
+    porcentaje < 85 -> Notificacion(
+        titulo = "Aforo medio",
+        hora = hora,
+        detalle = "$porcentaje% de capacidad. Hay una cantidad moderada de personas.",
+        icono = Icons.Filled.Groups,
+        color = AmarilloTexto,
+        fondo = AmarilloClaro,
+        nueva = nueva,
+        etiqueta = "MODERADO"
+    )
+    else -> Notificacion(
+        titulo = "¡Aforo alto!",
+        hora = hora,
+        detalle = "$porcentaje% de capacidad. El lugar está lleno, te recomendamos esperar.",
+        icono = Icons.Filled.Warning,
+        color = RojoFuerte,
+        fondo = RojoClaro,
+        nueva = nueva,
+        etiqueta = "LLENO"
+    )
+}
 
 @Composable
 fun PantallaNotificaciones() {
     var leidas by rememberSaveable { mutableStateOf(false) }
+
     val lista = listOf(
-        Notificacion("Aforo en nivel medio", "11:30 a.m.", "78% de capacidad", Icons.Filled.Groups, AmarilloTexto, AmarilloClaro, true),
+        notificacionAforo(porcentaje = 95, hora = "12:30 p.m.", nueva = true),
+        notificacionAforo(porcentaje = 78, hora = "11:30 a.m.", nueva = true),
         Notificacion("Calidad del aire buena", "10:15 a.m.", "12 µg/m³", Icons.Filled.Eco, VerdeFuerte, VerdeClaro, true),
-        Notificacion("Nuevo registro de entrada", "09:05 a.m.", "+1 persona", Icons.Filled.Add, VerdeOscuro, Color(0xFFE2E8F0), true),
-        Notificacion("Alerta aforo alto", "12 may, 12:00 p.m.", "95% de capacidad", Icons.Filled.Groups, RojoFuerte, RojoClaro, false),
-        Notificacion("Calidad del aire buena", "12 may, 11:00 a.m.", "Nivel saludable", Icons.Filled.Eco, VerdeFuerte, VerdeClaro, false)
+        notificacionAforo(porcentaje = 30, hora = "09:15 a.m.", nueva = false),
+        Notificacion("Nuevo registro de entrada", "09:05 a.m.", "+1 persona", Icons.Filled.Add, VerdeOscuro, Color(0xFFE2E8F0), false)
     )
 
     ContenidoPantalla {
@@ -774,21 +814,32 @@ fun PantallaNotificaciones() {
             )
         }
 
+        LeyendaAforo()
+
         TarjetaBlanca(Modifier.fillMaxWidth()) {
             lista.forEachIndexed { i, n ->
+                val esAforo = n.etiqueta != null
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 12.dp),
+                        .padding(vertical = 6.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        // Las de aforo llevan un fondo suave de su color
+                        .background(if (esAforo) n.fondo.copy(alpha = 0.45f) else Color.Transparent)
+                        .padding(10.dp),
                     verticalAlignment = Alignment.Top
                 ) {
                     IconoGrande(n.icono, n.color, n.fondo, n.titulo, 68, 42)
-                    Spacer(Modifier.width(16.dp))
+                    Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
                         Text(n.titulo, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
                         Text(n.hora, fontSize = 16.sp, color = GrisTexto)
                         Spacer(Modifier.height(4.dp))
-                        Text(n.detalle, fontSize = 18.sp, color = GrisTexto)
+                        Text(n.detalle, fontSize = 18.sp, color = GrisTexto, lineHeight = 22.sp)
+                        n.etiqueta?.let {
+                            Spacer(Modifier.height(8.dp))
+                            Etiqueta(it, n.fondo, n.color)
+                        }
                     }
                     if (n.nueva && !leidas) {
                         Box(
@@ -796,7 +847,7 @@ fun PantallaNotificaciones() {
                                 .padding(top = 6.dp)
                                 .size(14.dp)
                                 .clip(CircleShape)
-                                .background(VerdeFuerte)
+                                .background(n.color)
                         )
                     }
                 }
@@ -811,6 +862,43 @@ fun PantallaNotificaciones() {
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+// Explica qué significa cada color
+@Composable
+fun LeyendaAforo() {
+    TarjetaBlanca(Modifier.fillMaxWidth()) {
+        Text(
+            "¿Qué significan los colores?",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            color = TextoOscuro
+        )
+        Spacer(Modifier.height(12.dp))
+        FilaLeyenda(VerdeFuerte, "Verde", "Pocas personas, menos del 50%")
+        FilaLeyenda(Amarillo, "Amarillo", "Cantidad media, del 50% al 84%")
+        FilaLeyenda(RojoFuerte, "Rojo", "Lleno, 85% o más")
+    }
+}
+
+@Composable
+fun FilaLeyenda(color: Color, nombre: String, texto: String) {
+    Row(
+        Modifier.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(nombre, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
+            Text(texto, fontSize = 16.sp, color = GrisTexto)
+        }
     }
 }
 
@@ -1097,4 +1185,9 @@ fun LoginPreview() {
 @Composable
 fun AppPreview() {
     AppPrincipal(usuario = "Farid", session = FirebaseSession(LocalContext.current), onCerrarSesion = {})
+}
+@Preview(showBackground = true, widthDp = 360, heightDp = 1000)
+@Composable
+fun NotificacionesPreview() {
+    PantallaNotificaciones()
 }
