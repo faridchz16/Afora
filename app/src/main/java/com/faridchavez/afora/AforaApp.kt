@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Visibility
@@ -33,7 +35,9 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,6 +55,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -60,17 +65,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.CancellationException
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.launch
 
 // ---------- COLORES EXTRA ----------
 val VerdeOscuro = Color(0xFF064E3B)
@@ -82,6 +78,16 @@ val AzulFuerte = Color(0xFF0284C7)
 // ---------- DATOS DE EJEMPLO ----------
 val datosAforoDia = listOf(5f, 15f, 20f, 35f, 48f, 45f, 60f, 65f, 80f, 75f, 78f, 62f, 50f, 58f)
 val datosAire = listOf(11f, 10.5f, 11.5f, 12f, 11.5f, 13f, 13.5f, 12.5f, 12f, 13f, 13.5f, 13f, 14f)
+
+// Simulación del aforo "en vivo": se llena, se vacía y vuelve a subir
+val secuenciaAforo = listOf(78, 82, 87, 92, 95, 88, 76, 64, 55, 47, 38, 30, 36, 45, 58, 70)
+
+// 0 = bajo (verde), 1 = medio (amarillo), 2 = alto (rojo)
+fun indiceNivel(porcentaje: Int): Int = when {
+    porcentaje < 50 -> 0
+    porcentaje < 85 -> 1
+    else -> 2
+}
 
 enum class Pantalla(val titulo: String) {
     INICIO("Inicio"),
@@ -96,44 +102,24 @@ enum class Pantalla(val titulo: String) {
 // =====================================================
 @Composable
 fun AforaApp() {
-    val context = LocalContext.current.applicationContext
-    val session = remember { FirebaseSession(context) }
-    val store = remember { SessionStore(context) }
-    var usuario by remember { mutableStateOf<String?>(null) }
-    var restoring by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        session.onRefresh = { store.save(it) }
-        val saved = withContext(Dispatchers.IO) { store.read() }
-        if (saved != null) {
-            try { usuario = withContext(Dispatchers.IO) { session.restore(saved) } }
-            catch (e: Exception) { if (e is CancellationException) throw e; session.logout() }
-        }
-        restoring = false
-    }
-    if (restoring) {
-        Box(Modifier.fillMaxSize().background(Fondo), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-    } else if (usuario == null) {
-        PantallaLogin(session = session, onIngresar = { usuario = it })
+    var usuario by rememberSaveable { mutableStateOf<String?>(null) }
+    val u = usuario
+    if (u == null) {
+        PantallaLogin(onIngresar = { usuario = it })
     } else {
-        AppPrincipal(usuario = usuario!!, session = session, onCerrarSesion = {
-            session.logout(); store.clear(); usuario = null
-        })
+        AppPrincipal(usuario = u, onCerrarSesion = { usuario = null })
     }
 }
+
 // =====================================================
 // INICIO DE SESIÓN
 // =====================================================
 @Composable
-fun PantallaLogin(session: FirebaseSession, onIngresar: (String) -> Unit) {
+fun PantallaLogin(onIngresar: (String) -> Unit) {
     var correo by rememberSaveable { mutableStateOf("") }
-    var clave by remember { mutableStateOf("") }
+    var clave by rememberSaveable { mutableStateOf("") }
     var verClave by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var registro by rememberSaveable { mutableStateOf(false) }
-    var nombre by rememberSaveable { mutableStateOf("") }
-    var confirmacion by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    val authScope = rememberCoroutineScope()
 
     Column(
         Modifier
@@ -176,15 +162,10 @@ fun PantallaLogin(session: FirebaseSession, onIngresar: (String) -> Unit) {
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Column(Modifier.padding(24.dp)) {
-                Text(if (registro) "Crear cuenta" else "Iniciar sesión", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                Text("Iniciar sesión", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
                 Text("Ingresa con tu correo institucional", fontSize = 18.sp, color = GrisTexto)
                 Spacer(Modifier.height(24.dp))
 
-                if (registro) {
-                    OutlinedTextField(value = nombre, onValueChange = { nombre = it }, label = { Text("Nombre") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
-                    Spacer(Modifier.height(16.dp))
-                }
                 OutlinedTextField(
                     value = correo,
                     onValueChange = { correo = it; error = null },
@@ -220,17 +201,6 @@ fun PantallaLogin(session: FirebaseSession, onIngresar: (String) -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                if (registro) {
-                    Spacer(Modifier.height(16.dp))
-                    OutlinedTextField(value = confirmacion, onValueChange = { confirmacion = it },
-                        label = { Text("Confirmar contraseña") }, singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
-                }
-                TextButton(enabled = !busy, onClick = { registro = !registro; clave = ""; confirmacion = ""; error = null }) {
-                    Text(if (registro) "Ya tengo cuenta. Iniciar sesión" else "Crear una cuenta", color = VerdeFuerte)
-                }
                 error?.let {
                     Spacer(Modifier.height(8.dp))
                     Text(it, color = RojoFuerte, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
@@ -241,27 +211,12 @@ fun PantallaLogin(session: FirebaseSession, onIngresar: (String) -> Unit) {
                 Button(
                     onClick = {
                         when {
-                            correo.isBlank() || clave.isBlank() || (registro && (nombre.isBlank() || confirmacion.isBlank())) -> error = "Completa todos los campos"
-                            !android.util.Patterns.EMAIL_ADDRESS.matcher(correo.trim()).matches() -> error = "Ingresa un correo válido"
-                            registro && clave.length < 6 -> error = "La contraseña debe tener al menos 6 caracteres"
-                            registro && clave != confirmacion -> error = "Las contraseñas no coinciden"
-                            else -> {
-                                busy = true; error = null
-                                authScope.launch {
-                                    try {
-                                        val name = withContext(Dispatchers.IO) {
-                                            if (registro) session.register(nombre, correo, clave) else session.login(correo, clave)
-                                        }
-                                        clave = ""; confirmacion = ""; onIngresar(name)
-                                    } catch (e: Exception) {
-                                        if (e is CancellationException) throw e
-                                        error = e.message ?: "No se pudo conectar"
-                                    } finally { busy = false }
-                                }
-                            }
+                            correo.isBlank() || clave.isBlank() -> error = "Completa tu correo y contraseña"
+                            !correo.contains("@") -> error = "Ingresa un correo válido"
+                            clave.length < 4 -> error = "La contraseña debe tener al menos 4 caracteres"
+                            else -> onIngresar(correo)
                         }
                     },
-                    enabled = !busy,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp),
@@ -270,7 +225,7 @@ fun PantallaLogin(session: FirebaseSession, onIngresar: (String) -> Unit) {
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(28.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (busy) "Conectando…" else if (registro) "Registrarme" else "Ingresar", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text("Ingresar", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -281,31 +236,40 @@ fun PantallaLogin(session: FirebaseSession, onIngresar: (String) -> Unit) {
 // APP PRINCIPAL: menú lateral + barra superior + barra inferior
 // =====================================================
 @Composable
-fun AppPrincipal(usuario: String, session: FirebaseSession, onCerrarSesion: () -> Unit) {
-    var aforo by remember { mutableStateOf<SharedAforo?>(null) }
-    var estado by remember { mutableStateOf("Conectando con el comedor…") }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var active by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
-    DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, _ -> active = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }
-        lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
-    }
-    LaunchedEffect(active, session) {
-        if (active) while (true) {
-            try {
-                aforo = withContext(Dispatchers.IO) { SharedAforoRepository(session).fetch() }
-                estado = "Actualizado · " + java.text.DateFormat.getTimeInstance().format(java.util.Date(aforo!!.updatedAt))
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                estado = if (aforo == null) (e.message ?: "Sin conexión") else "Sin conexión · mostrando el último aforo recibido"
-            }
-            delay(2000)
-        }
-    }
+fun AppPrincipal(usuario: String, onCerrarSesion: () -> Unit) {
     var pantalla by rememberSaveable { mutableStateOf(Pantalla.INICIO) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // ---------- AFORO EN VIVO (simulado) ----------
+    var aforo by rememberSaveable { mutableIntStateOf(78) }
+    var avisarEspacio by rememberSaveable { mutableStateOf(false) }
+    var nivelAnterior by remember { mutableIntStateOf(indiceNivel(aforo)) }
+
+    // Cada 3 segundos el aforo cambia al siguiente valor de la secuencia
+    LaunchedEffect(Unit) {
+        var i = secuenciaAforo.indexOf(aforo).coerceAtLeast(0)
+        while (true) {
+            delay(3000)
+            i = (i + 1) % secuenciaAforo.size
+            aforo = secuenciaAforo[i]
+        }
+    }
+
+    // Cada vez que cambia el aforo, revisamos si hay que avisar
+    LaunchedEffect(aforo) {
+        val nivel = indiceNivel(aforo)
+        if (avisarEspacio && aforo < 50) {
+            // El usuario pidió aviso y ya hay espacio -> notificación verde
+            Notificador.mostrarAforo(context, aforo)
+            avisarEspacio = false
+        } else if (nivel == 2 && nivelAnterior != 2) {
+            // Se acaba de llenar -> notificación roja automática
+            Notificador.mostrarAforo(context, aforo)
+        }
+        nivelAnterior = nivel
+    }
 
     // Botón "atrás" del celular: cierra el menú o vuelve a Inicio
     BackHandler(enabled = drawerState.isOpen || pantalla != Pantalla.INICIO) {
@@ -343,8 +307,12 @@ fun AppPrincipal(usuario: String, session: FirebaseSession, onCerrarSesion: () -
         ) { padding ->
             Box(Modifier.padding(padding)) {
                 when (pantalla) {
-                    Pantalla.INICIO -> Column { Text("Hola, $usuario", Modifier.padding(16.dp), color = VerdeOscuro); Text(estado, Modifier.padding(horizontal = 16.dp)); aforo?.let { PantallaInicio(it.people, it.capacity) } }
-                    Pantalla.AFORO -> Column { Text(estado, Modifier.padding(16.dp)); aforo?.let { PantallaAforo(it.people, it.capacity) } }
+                    Pantalla.INICIO -> PantallaInicio(aforo = aforo)
+                    Pantalla.AFORO -> PantallaAforo(
+                        actual = aforo,
+                        avisando = avisarEspacio,
+                        onAvisar = { avisarEspacio = it }
+                    )
                     Pantalla.AMBIENTE -> PantallaAmbiente()
                     Pantalla.HISTORIAL -> PantallaHistorial()
                     Pantalla.NOTIFICACIONES -> PantallaNotificaciones()
@@ -484,14 +452,15 @@ fun MenuLateral(
 // PANTALLAS
 // =====================================================
 @Composable
-fun PantallaInicio(actual: Int, capacidad: Int) {
+fun PantallaInicio(aforo: Int = 78) {
     ContenidoPantalla {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.LocationOn, null, tint = VerdeFuerte, modifier = Modifier.size(30.dp))
             Spacer(Modifier.width(6.dp))
             Text("Campus Lima", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
         }
-        TarjetaAforo(actual = actual, capacidad = capacidad)
+        LineaEstado("Actualización en vivo", "Cada 3 s")
+        TarjetaAforo(actual = aforo, capacidad = 100)
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             TarjetaSensor(
                 modifier = Modifier.weight(1f),
@@ -518,7 +487,12 @@ fun PantallaInicio(actual: Int, capacidad: Int) {
 }
 
 @Composable
-fun PantallaAforo(actual: Int, capacidad: Int) {
+fun PantallaAforo(
+    actual: Int = 78,
+    capacidad: Int = 100,
+    avisando: Boolean = false,
+    onAvisar: (Boolean) -> Unit = {}
+) {
     val progreso = actual.toFloat() / capacidad
     val porcentaje = (progreso * 100).toInt()
     val (nivel, fondoChip, textoChip) = nivelAforo(porcentaje)
@@ -529,7 +503,7 @@ fun PantallaAforo(actual: Int, capacidad: Int) {
     }
 
     ContenidoPantalla {
-        LineaEstado("Aforo compartido", "Comedor")
+        LineaEstado("Actualización en vivo", "Cada 3 s")
 
         TarjetaBlanca(Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -546,6 +520,9 @@ fun PantallaAforo(actual: Int, capacidad: Int) {
             }
         }
 
+        // Botón / estado de "Avísame cuando haya espacio"
+        TarjetaAvisar(porcentaje = porcentaje, avisando = avisando, onCambiar = onAvisar)
+
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             TarjetaContador(
                 Modifier.weight(1f), Icons.AutoMirrored.Filled.Login,
@@ -559,7 +536,7 @@ fun PantallaAforo(actual: Int, capacidad: Int) {
 
         TarjetaContador(
             Modifier.fillMaxWidth(), Icons.Filled.Groups,
-            AmarilloTexto, AmarilloClaro, "$actual", "Personas dentro", horizontal = true
+            textoChip, fondoChip, "$actual", "Personas dentro", horizontal = true
         )
 
         TarjetaBlanca(Modifier.fillMaxWidth()) {
@@ -572,7 +549,7 @@ fun PantallaAforo(actual: Int, capacidad: Int) {
                     Text("Flujo de hoy", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
                     Text("Ocupación por hora", fontSize = 18.sp, color = GrisTexto)
                 }
-                Text("$porcentaje%", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = VerdeFuerte)
+                Text("$porcentaje%", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = colorArco)
             }
             Spacer(Modifier.height(16.dp))
             GraficoLinea(
@@ -911,6 +888,66 @@ fun nivelAforo(porcentaje: Int): Triple<String, Color, Color> = when {
     else -> Triple("AFORO ALTO", RojoClaro, RojoFuerte)
 }
 
+// Botón "Avísame cuando haya espacio" y sus estados
+@Composable
+fun TarjetaAvisar(porcentaje: Int, avisando: Boolean, onCambiar: (Boolean) -> Unit) {
+    when {
+        // Ya hay espacio: no hace falta avisar
+        porcentaje < 50 -> TarjetaBlanca(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconoGrande(Icons.Filled.Groups, VerdeFuerte, VerdeClaro, "Hay espacio", 72, 44)
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("¡Hay espacio!", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = VerdeTexto)
+                    Text("Es un buen momento para ir.", fontSize = 17.sp, color = GrisTexto)
+                }
+            }
+        }
+
+        // El usuario ya pidió el aviso
+        avisando -> TarjetaBlanca(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconoGrande(Icons.Filled.NotificationsActive, AmarilloTexto, AmarilloClaro, "Aviso activado", 72, 44)
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Aviso activado", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                    Text(
+                        "Te avisaremos cuando el aforo baje de 50%.",
+                        fontSize = 17.sp,
+                        color = GrisTexto
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { onCambiar(false) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(Icons.Filled.NotificationsOff, null, Modifier.size(26.dp), tint = GrisTexto)
+                Spacer(Modifier.width(8.dp))
+                Text("Cancelar aviso", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, color = GrisTexto)
+            }
+        }
+
+        // Está medio o lleno: mostramos el botón
+        else -> Button(
+            onClick = { onCambiar(true) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = VerdeFuerte)
+        ) {
+            Icon(Icons.Filled.NotificationsActive, null, Modifier.size(30.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("Avísame cuando haya espacio", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
 @Composable
 fun ContenidoPantalla(contenido: @Composable ColumnScope.() -> Unit) {
     Column(
@@ -1178,16 +1215,23 @@ fun GraficoLinea(
 @Preview(showBackground = true, widthDp = 360, heightDp = 800)
 @Composable
 fun LoginPreview() {
-    PantallaLogin(session = FirebaseSession(LocalContext.current), onIngresar = {})
+    PantallaLogin(onIngresar = {})
 }
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 800)
 @Composable
 fun AppPreview() {
-    AppPrincipal(usuario = "Farid", session = FirebaseSession(LocalContext.current), onCerrarSesion = {})
+    AppPrincipal(usuario = "farid@tecsup.edu.pe", onCerrarSesion = {})
 }
+
 @Preview(showBackground = true, widthDp = 360, heightDp = 1000)
 @Composable
 fun NotificacionesPreview() {
     PantallaNotificaciones()
+}
+
+@Preview(showBackground = true, widthDp = 360, heightDp = 1200)
+@Composable
+fun AforoPreview() {
+    PantallaAforo(actual = 92)
 }

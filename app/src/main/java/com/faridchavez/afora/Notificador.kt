@@ -1,6 +1,7 @@
 package com.faridchavez.afora
 
 import android.Manifest
+import android.R
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -61,7 +62,7 @@ object Notificador {
 
         if (tienePermiso(context)) {
             val notificacion = NotificationCompat.Builder(context, CANAL_ID)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(R.drawable.ic_dialog_info)
                 .setContentTitle(titulo)
                 .setContentText(texto)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(texto))
