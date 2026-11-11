@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -94,6 +95,7 @@ enum class Pantalla(val titulo: String) {
     AFORO("Aforo en tiempo real"),
     AMBIENTE("Ambiente"),
     HISTORIAL("Historial"),
+    MAPA("Mapa del comedor"),
     NOTIFICACIONES("Notificaciones")
 }
 
@@ -307,7 +309,10 @@ fun AppPrincipal(usuario: String, onCerrarSesion: () -> Unit) {
         ) { padding ->
             Box(Modifier.padding(padding)) {
                 when (pantalla) {
-                    Pantalla.INICIO -> PantallaInicio(aforo = aforo)
+                    Pantalla.INICIO -> PantallaInicio(
+                        aforo = aforo,
+                        onVerMapa = { pantalla = Pantalla.MAPA }
+                    )
                     Pantalla.AFORO -> PantallaAforo(
                         actual = aforo,
                         avisando = avisarEspacio,
@@ -315,6 +320,7 @@ fun AppPrincipal(usuario: String, onCerrarSesion: () -> Unit) {
                     )
                     Pantalla.AMBIENTE -> PantallaAmbiente()
                     Pantalla.HISTORIAL -> PantallaHistorial()
+                    Pantalla.MAPA -> PantallaMapa(aforoComedor = aforo)
                     Pantalla.NOTIFICACIONES -> PantallaNotificaciones()
                 }
             }
@@ -412,6 +418,7 @@ fun MenuLateral(
             Triple(Pantalla.AFORO, "Aforo", Icons.Filled.Groups),
             Triple(Pantalla.AMBIENTE, "Ambiente", Icons.Filled.Eco),
             Triple(Pantalla.HISTORIAL, "Historial", Icons.AutoMirrored.Filled.ShowChart),
+            Triple(Pantalla.MAPA, "Mapa del comedor", Icons.Filled.Map),
             Triple(Pantalla.NOTIFICACIONES, "Notificaciones", Icons.Filled.Notifications)
         )
         opciones.forEach { (p, nombre, icono) ->
@@ -452,7 +459,7 @@ fun MenuLateral(
 // PANTALLAS
 // =====================================================
 @Composable
-fun PantallaInicio(aforo: Int = 78) {
+fun PantallaInicio(aforo: Int = 78, onVerMapa: () -> Unit = {}) {
     ContenidoPantalla {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.LocationOn, null, tint = VerdeFuerte, modifier = Modifier.size(30.dp))
@@ -482,6 +489,20 @@ fun PantallaInicio(aforo: Int = 78) {
                 unidad = "°C",
                 estado = "Confortable"
             )
+        }
+
+        // Botón para abrir el mapa del comedor
+        Button(
+            onClick = onVerMapa,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = VerdeOscuro)
+        ) {
+            Icon(Icons.Filled.Map, null, Modifier.size(30.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("Ver mapa del comedor", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
