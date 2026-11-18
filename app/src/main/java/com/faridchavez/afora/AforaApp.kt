@@ -468,6 +468,7 @@ fun PantallaInicio(aforo: Int = 78, onVerMapa: () -> Unit = {}) {
         }
         LineaEstado("Actualización en vivo", "Cada 3 s")
         TarjetaAforo(actual = aforo, capacidad = 100)
+        TarjetaMejorHora()
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             TarjetaSensor(
                 modifier = Modifier.weight(1f),
